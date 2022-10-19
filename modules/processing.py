@@ -53,7 +53,7 @@ def get_correct_sampler(p):
         return sd_samplers.samplers_for_img2img
 
 class StableDiffusionProcessing:
-    def __init__(self, sd_model=None, outpath_samples=None, outpath_grids=None, prompt="", styles=None, seed=-1, subseed=-1, subseed_strength=0, seed_resize_from_h=-1, seed_resize_from_w=-1, seed_enable_extras=True, sampler_index=0, batch_size=1, n_iter=1, steps=50, cfg_scale=7.0, width=512, height=512, restore_faces=False, tiling=False, do_not_save_samples=False, do_not_save_grid=False, extra_generation_params=None, overlay_images=None, negative_prompt=None, eta=None, do_not_reload_embeddings=False):
+    def __init__(self, sd_model=None, outpath_samples=None, outpath_grids=None, prompt="", styles=None, seed=-1, subseed=-1, subseed_strength=0, seed_resize_from_h=-1, seed_resize_from_w=-1, seed_enable_extras=True, sampler_index=0, batch_size=1, n_iter=1, steps=50, cfg_scale=7.0, width=512, height=512, restore_faces=False, tiling=False, do_not_save_samples=False, do_not_save_grid=False, extra_generation_params=None, overlay_images=None, negative_prompt=None, eta=None, do_not_reload_embeddings=False, filter_nsfw=None):
         self.sd_model = sd_model
         self.outpath_samples: str = outpath_samples
         self.outpath_grids: str = outpath_grids
@@ -90,6 +90,10 @@ class StableDiffusionProcessing:
         self.s_tmin = opts.s_tmin
         self.s_tmax = float('inf')  # not representable as a standard ui option
         self.s_noise = opts.s_noise
+        if filter_nsfw is None:
+            self.filter_nsfw = opts.filter_nsfw
+        else:
+            self.filter_nsfw = filter_nsfw
 
         if not seed_enable_extras:
             self.subseed = -1
@@ -148,6 +152,7 @@ class Processed:
         self.all_seeds = all_seeds or [self.seed]
         self.all_subseeds = all_subseeds or [self.subseed]
         self.infotexts = infotexts or [info]
+        self.filter_nsfw = p.filter_nsfw
 
     def js(self):
         obj = {
@@ -413,7 +418,8 @@ def process_images(p: StableDiffusionProcessing) -> Processed:
 
             devices.torch_gc()
 
-            if opts.filter_nsfw:
+            #if opts.filter_nsfw:
+            if p.filter_nsfw:
                 import modules.safety as safety
                 x_samples_ddim = modules.safety.censor_batch(x_samples_ddim)
 
