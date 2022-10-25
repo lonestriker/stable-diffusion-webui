@@ -38,7 +38,6 @@ import modules.codeformer_model
 import modules.generation_parameters_copypaste
 import modules.gfpgan_model
 import modules.hypernetworks.ui
-import modules.images_history as img_his
 import modules.ldsr_model
 import modules.scripts
 import modules.shared as shared
@@ -51,12 +50,11 @@ from modules.sd_samplers import samplers, samplers_for_img2img
 import modules.textual_inversion.ui
 import modules.hypernetworks.ui
 
-import modules.images_history as img_his
-
-
 # this is a fix for Windows users. Without it, javascript files will be served with text/html content-type and the browser will not show any UI
 mimetypes.init()
 mimetypes.add_type('application/javascript', '.js')
+txt2img_paste_fields = []
+img2img_paste_fields = []
 
 
 if not cmd_opts.share and not cmd_opts.listen:
@@ -318,10 +316,10 @@ def check_progress_call(id_part):
         if shared.parallel_processing_allowed:
 
             if shared.state.sampling_step - shared.state.current_image_sampling_step >= opts.show_progress_every_n_steps and shared.state.current_latent is not None:
-                if opts.progress_decode_combined:
-                    shared.state.current_image = modules.sd_samplers.samples_to_image_grid_combined(shared.state.current_latent)
-                else:
+                if opts.show_progress_grid:
                     shared.state.current_image = modules.sd_samplers.samples_to_image_grid(shared.state.current_latent)
+                else:
+                    shared.state.current_image = modules.sd_samplers.sample_to_image(shared.state.current_latent)
                 shared.state.current_image_sampling_step = shared.state.sampling_step
 
         image = shared.state.current_image
@@ -580,6 +578,9 @@ def apply_setting(key, value):
     if value is None:
         return gr.update()
 
+    if shared.cmd_opts.freeze_settings:
+        return gr.update()
+
     # dont allow model to be swapped when model hash exists in prompt
     if key == "sd_model_checkpoint" and opts.disable_weights_auto_swap:
         return gr.update()
@@ -783,6 +784,7 @@ def create_ui(wrap_gradio_gpu_call):
                 ]
             )
 
+            global txt2img_paste_fields 
             txt2img_paste_fields = [
                 (txt2img_prompt, "Prompt"),
                 (txt2img_negative_prompt, "Negative prompt"),
@@ -1053,6 +1055,7 @@ def create_ui(wrap_gradio_gpu_call):
                     outputs=[prompt, negative_prompt, style1, style2],
                 )
 
+            global img2img_paste_fields
             img2img_paste_fields = [
                 (img2img_prompt, "Prompt"),
                 (img2img_negative_prompt, "Negative prompt"),
@@ -1101,9 +1104,9 @@ def create_ui(wrap_gradio_gpu_call):
                                 upscaling_resize_w = gr.Number(label="Width", value=512, precision=0)
                                 upscaling_resize_h = gr.Number(label="Height", value=512, precision=0)
                             upscaling_crop = gr.Checkbox(label='Crop to fit', value=True)
-
+                
                 with gr.Group():
-                    extras_upscaler_1 = gr.Radio(label='Upscaler 1', elem_id="extras_upscaler_1", choices=[x.name for x in shared.sd_upscalers], value=shared.sd_upscalers[0].name, type="index")
+                    extras_upscaler_1 = gr.Radio(label='Upscaler 1', elem_id="extras_upscaler_1", choices=[x.name for x in shared.sd_upscalers], value=shared.sd_upscalers[0].name, type="index") 
 
                 with gr.Group():
                     extras_upscaler_2 = gr.Radio(label='Upscaler 2', elem_id="extras_upscaler_2", choices=[x.name for x in shared.sd_upscalers], value=shared.sd_upscalers[0].name, type="index")
@@ -1190,15 +1193,7 @@ def create_ui(wrap_gradio_gpu_call):
             inputs=[image],
             outputs=[html, generation_info, html2],
         )
-    #images history
-    images_history_switch_dict = {
-        "fn": modules.generation_parameters_copypaste.connect_paste,
-        "t2i": txt2img_paste_fields,
-        "i2i": img2img_paste_fields
-    }
-
-    images_history = img_his.create_history_tabs(gr, opts, cmd_opts, wrap_gradio_call(modules.extras.run_pnginfo), images_history_switch_dict)
-
+   
     with gr.Blocks() as modelmerger_interface:
         with gr.Row().style(equal_height=False):
             with gr.Column(variant='panel'):
@@ -1501,6 +1496,8 @@ Requested path was: {f}
     def run_settings(*args):
         changed = 0
 
+        assert not shared.cmd_opts.freeze_settings, "changing settings is disabled"
+
         for key, value, comp in zip(opts.data_labels.keys(), args, components):
             if comp != dummy_component and not opts.same_type(value, opts.data_labels[key].default):
                 return f"Bad value for setting {key}: {value}; expecting {type(opts.data_labels[key].default).__name__}", opts.dumpjson()
@@ -1530,6 +1527,8 @@ Requested path was: {f}
         return f'{changed} settings changed.', opts.dumpjson()
 
     def run_settings_single(value, key):
+        assert not shared.cmd_opts.freeze_settings, "changing settings is disabled"
+
         if not opts.same_type(value, opts.data_labels[key].default):
             return gr.update(visible=True), opts.dumpjson()
 
@@ -1582,7 +1581,7 @@ Requested path was: {f}
                     elem_id, text = item.section
                     gr.HTML(elem_id="settings_header_text_{}".format(elem_id), value='<h1 class="gr-button-lg">{}</h1>'.format(text))
 
-                if k in quicksettings_names:
+                if k in quicksettings_names and not shared.cmd_opts.freeze_settings:
                     quicksettings_list.append((i, k, item))
                     components.append(dummy_component)
                 else:
@@ -1615,7 +1614,7 @@ Requested path was: {f}
 
         def reload_scripts():
             modules.scripts.reload_script_body_only()
-            reload_javascript() # need to refresh the html page
+            reload_javascript()  # need to refresh the html page
 
         reload_script_bodies.click(
             fn=reload_scripts,
@@ -1643,7 +1642,6 @@ Requested path was: {f}
         (img2img_interface, "img2img", "img2img"),
         (extras_interface, "Extras", "extras"),
         (pnginfo_interface, "PNG Info", "pnginfo"),
-        (images_history, "Image Browser", "images_history"),
         (modelmerger_interface, "Checkpoint Merger", "modelmerger"),
         (train_interface, "Train", "ti"),
     ]
@@ -1887,6 +1885,7 @@ def load_javascript(raw_response):
         javascript = f'<script>{jsfile.read()}</script>'
 
     scripts_list = modules.scripts.list_scripts("javascript", ".js")
+    
     for basedir, filename, path in scripts_list:
         with open(path, "r", encoding="utf8") as jsfile:
             javascript += f"\n<!-- {filename} --><script>{jsfile.read()}</script>"
