@@ -1,22 +1,17 @@
-import math
-import os
-import sys
-import traceback
 import torch
-import numpy as np
-from torch import einsum
 from torch.nn.functional import silu
 
 import modules.textual_inversion.textual_inversion
-from modules import prompt_parser, devices, sd_hijack_optimizations, shared
+from modules import devices, sd_hijack_optimizations, shared, sd_hijack_checkpoint
 from modules.hypernetworks import hypernetwork
 from modules.shared import cmd_opts
-from modules import sd_hijack_clip, sd_hijack_open_clip
+from modules import sd_hijack_clip, sd_hijack_open_clip, sd_hijack_unet
 
 from modules.sd_hijack_optimizations import invokeAI_mps_available
 
 import ldm.modules.attention
 import ldm.modules.diffusionmodules.model
+import ldm.modules.diffusionmodules.openaimodel
 import ldm.models.diffusion.ddim
 import ldm.models.diffusion.plms
 import ldm.modules.encoders.modules
@@ -34,10 +29,12 @@ ldm.modules.attention.BasicTransformerBlock.ATTENTION_MODES["softmax-xformers"] 
 ldm.modules.attention.print = lambda *args: None
 ldm.modules.diffusionmodules.model.print = lambda *args: None
 
+
 def apply_optimizations():
     undo_optimizations()
 
     ldm.modules.diffusionmodules.model.nonlinearity = silu
+    ldm.modules.diffusionmodules.openaimodel.th = sd_hijack_unet.th
 
     if cmd_opts.force_enable_xformers or (cmd_opts.xformers and shared.xformers_available and torch.version.cuda and (6, 0) <= torch.cuda.get_device_capability(shared.device) <= (9, 0)):
         print("Applying xformers cross attention optimization.")
@@ -66,6 +63,10 @@ def undo_optimizations():
     ldm.modules.diffusionmodules.model.AttnBlock.forward = diffusionmodules_model_AttnBlock_forward
 
 
+def fix_checkpoint():
+    ldm.modules.attention.BasicTransformerBlock.forward = sd_hijack_checkpoint.BasicTransformerBlock_forward
+    ldm.modules.diffusionmodules.openaimodel.ResBlock.forward = sd_hijack_checkpoint.ResBlock_forward
+    ldm.modules.diffusionmodules.openaimodel.AttentionBlock.forward = sd_hijack_checkpoint.AttentionBlock_forward
 
 class StableDiffusionModelHijack:
     fixes = None
@@ -88,6 +89,7 @@ class StableDiffusionModelHijack:
         self.clip = m.cond_stage_model
 
         apply_optimizations()
+        fix_checkpoint()
 
         def flatten(el):
             flattened = [flatten(children) for children in el.children()]
@@ -177,11 +179,7 @@ def register_buffer(self, name, attr):
 
     if type(attr) == torch.Tensor:
         if attr.device != devices.device:
-
-            if devices.has_mps():
-                attr = attr.to(device="mps", dtype=torch.float32)
-            else:
-                attr = attr.to(devices.device)
+            attr = attr.to(device=devices.device, dtype=(torch.float32 if devices.device.type == 'mps' else None))
 
     setattr(self, name, attr)
 
